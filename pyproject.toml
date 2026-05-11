@@ -1,0 +1,9 @@
+[project]
+name = "costco-grocery-agent"
+version = "0.1.0"
+description = "A purchase-safe personal grocery ordering agent with mocked Costco integration."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
