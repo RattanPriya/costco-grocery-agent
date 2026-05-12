@@ -23,6 +23,9 @@ Core modules:
 - `grocery_agent.costco`: integration interface plus mocked Costco inventory/order behavior.
 - `grocery_agent.browser`: browser session abstraction, with fake test adapter and Chrome AppleScript adapter.
 - `grocery_agent.costco_sameday`: Costco Same Day preflight, exact product-rule cart building, checkout review parsing, tip policy, and final approval gating.
+- `grocery_agent.security`: signed phone approval tokens.
+- `grocery_agent.cloud`: cloud credential/session policy helpers that reject raw Costco password storage.
+- `grocery_agent.web_app`: phone-friendly cart review and approval app.
 - `grocery_agent.agent`: cart generation, substitution handling, preference learning, review, approval, and purchase guardrails.
 - `grocery_agent.storage`: JSON-backed persistence.
 - `grocery_agent.scheduler`: every-other-Sunday proactive cart creation helper.
@@ -92,6 +95,24 @@ The preflight checks:
 - The integration is abstracted behind `CostcoClient`, so Costco can later be replaced by Instacart, Whole Foods, Target, or browser automation.
 - Live browser checkout requires a final approval statement before `Place order` is clicked.
 - Retail browser automation verifies active tab, Same Day auth state, delivery address, cart count, and visible checkout totals before purchase.
+
+## Phone Review App
+
+Run a local mobile-friendly review app:
+
+```bash
+GROCERY_AGENT_APPROVAL_SECRET="$(openssl rand -hex 32)" python3 -m grocery_agent.cli serve-review --host 0.0.0.0 --port 8765
+```
+
+Then open `/cart` from your phone through a secure tunnel or deployed HTTPS service.
+
+The review app can approve or reject a review-ready cart. It does not place an order; final purchase still requires explicit approval after live checkout review.
+
+## Cloud Deployment
+
+See `CLOUD_DEPLOYMENT.md`.
+
+The cloud plan uses a persistent browser session/profile instead of storing a Costco password. If Costco signs out or asks for MFA, the worker stops and asks the user to reauthenticate manually.
 
 ## Tests
 

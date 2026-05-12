@@ -51,6 +51,9 @@ def main() -> None:
     build_parser.add_argument("items", help="Comma-separated household grocery item names")
     build_parser.add_argument("--settle-seconds", type=float, default=4.0, help="Seconds to wait after each browser action")
     build_parser.add_argument("--target-url-substring", default="sameday.costco.com", help="Chrome tab URL substring to target")
+    web_parser = subcommands.add_parser("serve-review", help="Run phone-friendly cart review web app")
+    web_parser.add_argument("--host", default="127.0.0.1")
+    web_parser.add_argument("--port", type=int, default=8765)
 
     args = parser.parse_args()
     store = JsonStore(_data_path())
@@ -169,6 +172,10 @@ def main() -> None:
             print("Needs review:")
             for item in result.missing_rules:
                 print(f"- {item}")
+    elif args.command == "serve-review":
+        from grocery_agent.web_app import run
+
+        run(host=args.host, port=args.port)
 
 
 def _data_path() -> Path:
