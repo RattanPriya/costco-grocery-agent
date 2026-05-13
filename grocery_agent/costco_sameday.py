@@ -54,6 +54,10 @@ class CostcoSameDayBrowserAgent:
             issues=issues,
         )
 
+    def open_storefront(self) -> PreflightReport:
+        self.browser.open_url("https://sameday.costco.com/store/costco/storefront")
+        return self.preflight()
+
     def build_cart(self, requested_items: list[str]) -> CartBuildResult:
         preflight = self.preflight()
         if not preflight.ok:
@@ -86,9 +90,24 @@ class CostcoSameDayBrowserAgent:
         preflight = self.preflight()
         if not preflight.ok:
             raise SafetyGateError("; ".join(preflight.issues))
-        self.browser.click_button_containing(text="Go to checkout")
-        self.browser.click_button(text="Continue to checkout")
+        state = self.browser.current_state()
+        if "checkout" not in state.url:
+            self.open_cart_review_text()
+            try:
+                _click_first_available(self.browser, ["Go to checkout", "Checkout", "Continue to checkout"])
+            except BrowserAutomationError as exc:
+                minimum_message = _minimum_checkout_message(_visible_text(self.browser.current_state()))
+                if minimum_message:
+                    raise SafetyGateError(minimum_message) from exc
+                raise
+        _try_click_first_available(self.browser, ["Continue to checkout", "Checkout"])
         return self.read_checkout_review()
+
+    def open_cart_review_text(self) -> str:
+        state = self.browser.current_state()
+        if not _cart_dialog_text(state):
+            state = _open_cart_drawer(self.browser)
+        return _cart_review_text(state)
 
     def read_checkout_review(self) -> CheckoutReview:
         state = self.browser.current_state()
@@ -122,11 +141,12 @@ class CostcoSameDayBrowserAgent:
 def resolve_product_rule(profile: GroceryProfile, requested_item: str) -> ProductRule | None:
     key = _normalize(requested_item)
     rules = profile.preferences.product_rules
-    if key in rules:
-        return rules[key]
+    for candidate in _rule_key_variants(key):
+        if candidate in rules:
+            return rules[candidate]
     for rule_key, rule in rules.items():
         names = {_normalize(rule_key), _normalize(rule.canonical_item), _normalize(rule.preferred_product_name)}
-        if key in names:
+        if any(candidate in names for candidate in _rule_key_variants(key)):
             return rule
     return None
 
@@ -142,6 +162,47 @@ def _wait_for_product_text(browser: BrowserSession, product_name: str, timeout_s
         time.sleep(2)
         state = browser.current_state()
     return state
+
+
+def _click_first_available(browser: BrowserSession, labels: list[str]) -> BrowserPageState:
+    last_error: BrowserAutomationError | None = None
+    for label in labels:
+        try:
+            return browser.click_button_containing(text=label)
+        except BrowserAutomationError as exc:
+            last_error = exc
+    raise last_error or BrowserAutomationError(f"No button found from: {', '.join(labels)}")
+
+
+def _open_cart_drawer(browser: BrowserSession) -> BrowserPageState:
+    try:
+        state = browser.click_selector("#floating-cart-button")
+        if _cart_dialog_text(state):
+            return state
+    except BrowserAutomationError:
+        pass
+    try:
+        state = browser.click_selector('[data-testid="floating-cart-button"]')
+        if _cart_dialog_text(state):
+            return state
+    except BrowserAutomationError:
+        pass
+    try:
+        state = _click_first_available(browser, ["View cart", "Saving", "Cart"])
+        if _cart_dialog_text(state):
+            return state
+        return state
+    except BrowserAutomationError as exc:
+        current = browser.current_state()
+        visible_buttons = ", ".join(current.buttons[:10]) or "no visible buttons"
+        raise BrowserAutomationError(f"Cart drawer could not be opened. Visible buttons: {visible_buttons}") from exc
+
+
+def _try_click_first_available(browser: BrowserSession, labels: list[str]) -> BrowserPageState | None:
+    try:
+        return _click_first_available(browser, labels)
+    except BrowserAutomationError:
+        return None
 
 
 def parse_checkout_review(state: BrowserPageState) -> CheckoutReview:
@@ -165,8 +226,57 @@ def _visible_text(state: BrowserPageState) -> str:
     return "\n".join([state.body_text, *state.buttons, *state.inputs, *state.dialogs])
 
 
+def _cart_dialog_text(state: BrowserPageState) -> str:
+    for dialog in state.dialogs:
+        if "Cart" in dialog:
+            return dialog
+    return ""
+
+
+def _cart_review_text(state: BrowserPageState) -> str:
+    text = _cart_dialog_text(state) or _visible_text(state)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines[:120])
+
+
+def _minimum_checkout_message(text: str) -> str | None:
+    match = re.search(r"\$([0-9]+(?:\.\d{2})?)\s+Min\.?\s+to checkout", text, re.I)
+    if match:
+        return f"Costco checkout is unavailable because the cart is below the ${float(match.group(1)):.2f} minimum."
+    match = re.search(r"Add\s+\$([0-9]+(?:\.\d{2})?)\s+more", text, re.I)
+    if match:
+        return f"Costco checkout is unavailable. Add about ${float(match.group(1)):.2f} more to reach checkout."
+    return None
+
+
 def _normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _rule_key_variants(key: str) -> list[str]:
+    variants = [key]
+    words = key.split()
+    if not words:
+        return variants
+    last = words[-1]
+    replacements = []
+    if last.endswith("ies") and len(last) > 3:
+        replacements.append(last[:-3] + "y")
+    elif last.endswith("y") and len(last) > 1:
+        replacements.append(last[:-1] + "ies")
+    if last.endswith("es") and len(last) > 2:
+        replacements.append(last[:-2])
+    elif last.endswith(("s", "x", "ch", "sh")):
+        replacements.append(last + "es")
+    if last.endswith("s") and len(last) > 1:
+        replacements.append(last[:-1])
+    else:
+        replacements.append(last + "s")
+    for replacement in replacements:
+        candidate = " ".join([*words[:-1], replacement]).strip()
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+    return variants
 
 
 def _quote_query(value: str) -> str:

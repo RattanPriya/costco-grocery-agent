@@ -35,6 +35,10 @@ The code enforces this boundary with `CostcoCredentialPolicy`: if `COSTCO_PASSWO
 - `GROCERY_AGENT_APPROVAL_SECRET`: HMAC secret for phone approval links.
 - `GROCERY_AGENT_DATA`: path to persistent JSON storage or mounted volume path.
 - `GROCERY_AGENT_CLOUD_STATE`: path to encrypted persistent browser session state.
+- `GROCERY_AGENT_REVIEW_BASE_URL`: public HTTPS base URL for the phone review app.
+- Optional Telegram notifier:
+  - `TELEGRAM_BOT_TOKEN`: Telegram Bot API token from BotFather.
+  - `TELEGRAM_CHAT_ID`: destination or allowlisted chat ID for review notifications.
 
 Do not add Costco username/password secrets.
 
@@ -58,6 +62,8 @@ The review app supports:
 - signed approval tokens
 - signed rejection tokens
 - approval of the cart for checkout review
+- Telegram-native review with inline Approve/Reject buttons
+- optional Telegram notifications with a phone-friendly web review button
 - no final order placement
 
 Final purchase still requires explicit approval after checkout totals, payment, delivery window, and tip are visible.
@@ -83,6 +89,26 @@ Run at Sunday 8am in the household timezone:
 python3 -m grocery_agent.cli proactive --today "$(date +%F)"
 python3 -m grocery_agent.cli serve-review --host 0.0.0.0 --port 8765
 ```
+
+After a cart is prepared, send a remote review notification:
+
+```bash
+python3 -m grocery_agent.cli telegram-review
+```
+
+Or run an interactive bot and message it `/cart`:
+
+```bash
+python3 -m grocery_agent.cli telegram-bot
+```
+
+For live Costco Same Day cart building from Telegram, use the browser-backed bot while a signed-in Chrome tab is available:
+
+```bash
+python3 -m grocery_agent.cli telegram-costco-bot
+```
+
+Message `/grocery item one, item two`. The bot opens Costco Same Day in Chrome, only adds items with exact product rules, sends checkout review details to Telegram, and requires a final Telegram button press before clicking the real Costco `Place order` button.
 
 For live Costco Same Day cart building, run the browser-backed command after preflight succeeds:
 

@@ -17,6 +17,9 @@ class BrowserSession(Protocol):
     def current_state(self) -> BrowserPageState:
         raise NotImplementedError
 
+    def open_url(self, url: str) -> BrowserPageState:
+        raise NotImplementedError
+
     def navigate(self, url: str) -> BrowserPageState:
         raise NotImplementedError
 
@@ -27,6 +30,9 @@ class BrowserSession(Protocol):
         raise NotImplementedError
 
     def click_button_near_text(self, nearby_text: str, button_text: str) -> BrowserPageState:
+        raise NotImplementedError
+
+    def click_selector(self, selector: str) -> BrowserPageState:
         raise NotImplementedError
 
     def set_text_input(self, selector: str, value: str) -> BrowserPageState:
@@ -43,6 +49,11 @@ class FakeBrowserSession:
             raise BrowserAutomationError("No fake browser states configured.")
         return self.states[-1]
 
+    def open_url(self, url: str) -> BrowserPageState:
+        self.actions.append(f"open_url:{url}")
+        state = self.current_state()
+        return BrowserPageState(url=url, title=state.title, body_text=state.body_text, buttons=state.buttons, inputs=state.inputs, dialogs=state.dialogs)
+
     def navigate(self, url: str) -> BrowserPageState:
         self.actions.append(f"navigate:{url}")
         state = self.current_state()
@@ -50,11 +61,15 @@ class FakeBrowserSession:
 
     def click_button(self, text: str | None = None, aria: str | None = None) -> BrowserPageState:
         label = aria or text
+        if label and label not in _fake_button_labels(self.current_state()):
+            raise BrowserAutomationError(f"Button not found: {label}")
         self.actions.append(f"click:{label}")
         return self.current_state()
 
     def click_button_containing(self, text: str | None = None, aria: str | None = None) -> BrowserPageState:
         label = aria or text
+        if label and not any(label in button for button in _fake_button_labels(self.current_state())):
+            raise BrowserAutomationError(f"Button not found: {label}")
         self.actions.append(f"click_contains:{label}")
         return self.current_state()
 
@@ -62,9 +77,17 @@ class FakeBrowserSession:
         self.actions.append(f"click_near:{nearby_text}:{button_text}")
         return self.current_state()
 
+    def click_selector(self, selector: str) -> BrowserPageState:
+        self.actions.append(f"click_selector:{selector}")
+        return self.current_state()
+
     def set_text_input(self, selector: str, value: str) -> BrowserPageState:
         self.actions.append(f"set_text:{selector}:{value}")
         return self.current_state()
+
+
+def _fake_button_labels(state: BrowserPageState) -> list[str]:
+    return [label.replace("\n", " ").strip() for label in state.buttons]
 
 
 class AppleScriptChromeSession:
@@ -80,6 +103,11 @@ class AppleScriptChromeSession:
 
     def current_state(self) -> BrowserPageState:
         return _state_from_json(self._execute_javascript(_js_state()))
+
+    def open_url(self, url: str) -> BrowserPageState:
+        _run_osascript(f'tell application "Google Chrome" to open location {json.dumps(url)}')
+        self._settle()
+        return self.current_state()
 
     def navigate(self, url: str) -> BrowserPageState:
         js = f"location.href={json.dumps(url)}"
@@ -111,6 +139,13 @@ class AppleScriptChromeSession:
         clicked = self._execute_javascript(_click_button_near_text_js(nearby_text, button_text))
         if clicked != "true":
             raise BrowserAutomationError(f"Button {button_text!r} not found near {nearby_text!r}")
+        self._settle()
+        return self.current_state()
+
+    def click_selector(self, selector: str) -> BrowserPageState:
+        clicked = self._execute_javascript(_click_selector_js(selector))
+        if clicked != "true":
+            raise BrowserAutomationError(f"Element not found: {selector}")
         self._settle()
         return self.current_state()
 
@@ -174,7 +209,7 @@ def _js_state() -> str:
 
 
 def _button_predicate(text: str | None, aria: str | None, exact: bool) -> str:
-    field = "(b.getAttribute('aria-label')||'')" if aria else "(b.innerText||'').trim()"
+    field = "_buttonLabel(b)"
     value = json.dumps(aria or text)
     if exact:
         return f"{field}==={value}"
@@ -186,7 +221,19 @@ def _click_button_script(predicate: str) -> str:
 
 
 def _click_button_js(predicate: str) -> str:
-    return f"const b=[...document.querySelectorAll('button')].find(b=>{predicate}); if(!b) false; else {{ b.click(); true; }}"
+    return f"""
+(() => {{
+const _norm=s=>(s||'').replace(/\\s+/g,' ').trim();
+const _buttonLabel=b=>_norm([b.innerText,b.textContent,b.getAttribute('aria-label')].filter(Boolean).join(' '));
+const b=[...document.querySelectorAll('button,[role=button],a')].find(b=>{predicate});
+if(!b) return false;
+b.scrollIntoView({{block:'center'}});
+for (const type of ['pointerdown','mousedown','mouseup','click']) {{
+  b.dispatchEvent(new MouseEvent(type,{{bubbles:true,cancelable:true,view:window}}));
+}}
+return true;
+}})();
+"""
 
 
 def _click_button_near_text_script(nearby_text: str, button_text: str) -> str:
@@ -216,6 +263,20 @@ return false;
 })();
 """ % (json.dumps(nearby_text), json.dumps(button_text))
     return js
+
+
+def _click_selector_js(selector: str) -> str:
+    return f"""
+(() => {{
+const element = document.querySelector({json.dumps(selector)});
+if (!element) return false;
+element.scrollIntoView({{block:'center'}});
+for (const type of ['pointerdown','mousedown','mouseup','click']) {{
+  element.dispatchEvent(new MouseEvent(type,{{bubbles:true,cancelable:true,view:window}}));
+}}
+return true;
+}})();
+"""
 
 
 def _targeted_javascript_script(url_substring: str, js: str) -> str:

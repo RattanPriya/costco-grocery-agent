@@ -108,6 +108,84 @@ Then open `/cart` from your phone through a secure tunnel or deployed HTTPS serv
 
 The review app can approve or reject a review-ready cart. It does not place an order; final purchase still requires explicit approval after live checkout review.
 
+### Remote Phone Review Notifications
+
+Use Telegram for remote review without exposing the local web app. Create a bot with BotFather, then set:
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
+```
+
+Run the polling bot:
+
+```bash
+python3 -m grocery_agent.cli telegram-bot
+```
+
+Message the bot `/start` from Telegram to see your chat ID, then `/cart` to review the latest cart with inline Approve/Reject buttons. To lock the bot to your chat after you know the chat ID:
+
+```bash
+export TELEGRAM_CHAT_ID="123456789"
+python3 -m grocery_agent.cli telegram-bot
+```
+
+Send the latest cart directly to one configured chat:
+
+```bash
+python3 -m grocery_agent.cli telegram-review
+```
+
+Expose the review app through HTTPS, for example with a tunnel or cloud deployment, then set:
+
+```bash
+export GROCERY_AGENT_REVIEW_BASE_URL="https://your-review-app.example"
+```
+
+Print the phone review link for any cloud app or message workflow:
+
+```bash
+python3 -m grocery_agent.cli review-link
+```
+
+Send the latest cart to Telegram:
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
+export TELEGRAM_CHAT_ID="123456789"
+python3 -m grocery_agent.cli notify-review
+```
+
+The `notify-review` command sends a "Review cart" button that opens the phone review app. The Telegram-native `telegram-bot` and `telegram-review` commands approve or reject directly through Telegram callback buttons. Final purchase still requires explicit checkout approval.
+
+### Live Costco Telegram Flow
+
+For real Costco Same Day ordering, first open Chrome to `sameday.costco.com`, sign in manually, and make sure the delivery address is correct. The agent does not store your Costco password.
+
+Start the live bot:
+
+```bash
+export TELEGRAM_BOT_TOKEN="123456:telegram-bot-token"
+export TELEGRAM_CHAT_ID="123456789"
+python3 -m grocery_agent.cli telegram-costco-bot
+```
+
+In Telegram:
+
+```text
+/grocery strawberries, onions, olive oil
+```
+
+The bot will:
+
+- open Costco Same Day in Google Chrome using the saved browser session
+- check the active Costco Same Day Chrome tab
+- add only items with remembered exact product rules
+- open checkout review
+- send checkout total, address, payment summary, delivery window, and item count back to Telegram
+- show `Refresh review` and `Approve and place order` buttons
+
+The final approval button clicks Costco's real `Place order` button. Use it only after checking the Telegram checkout review details.
+
 ## Cloud Deployment
 
 See `CLOUD_DEPLOYMENT.md`.

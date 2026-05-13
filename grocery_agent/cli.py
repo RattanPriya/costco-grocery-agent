@@ -10,6 +10,7 @@ from grocery_agent.browser import AppleScriptChromeSession, BrowserAutomationErr
 from grocery_agent.costco import MockCostcoClient
 from grocery_agent.costco_sameday import CostcoSameDayBrowserAgent, SafetyGateError, remember_product_rule
 from grocery_agent.models import GroceryProfile, PantryEstimate, ProductRule
+from grocery_agent.notifications import ReviewLinkBuilder, TelegramApiClient, TelegramCartBot, TelegramCostcoBot, TelegramNotifier
 from grocery_agent.scheduler import BiweeklySundayScheduler
 from grocery_agent.storage import JsonStore
 
@@ -54,6 +55,25 @@ def main() -> None:
     web_parser = subcommands.add_parser("serve-review", help="Run phone-friendly cart review web app")
     web_parser.add_argument("--host", default="127.0.0.1")
     web_parser.add_argument("--port", type=int, default=8765)
+    link_parser = subcommands.add_parser("review-link", help="Print the remote phone review URL for the latest cart")
+    link_parser.add_argument("--base-url", default=os.environ.get("GROCERY_AGENT_REVIEW_BASE_URL"))
+    notify_parser = subcommands.add_parser("notify-review", help="Send the latest cart review link to Telegram")
+    notify_parser.add_argument("--base-url", default=os.environ.get("GROCERY_AGENT_REVIEW_BASE_URL"))
+    notify_parser.add_argument("--telegram-bot-token", default=os.environ.get("TELEGRAM_BOT_TOKEN"))
+    notify_parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID"))
+    telegram_review_parser = subcommands.add_parser("telegram-review", help="Send the latest cart directly to Telegram with approve/reject buttons")
+    telegram_review_parser.add_argument("--telegram-bot-token", default=os.environ.get("TELEGRAM_BOT_TOKEN"))
+    telegram_review_parser.add_argument("--telegram-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID"))
+    telegram_bot_parser = subcommands.add_parser("telegram-bot", help="Run a Telegram polling bot for cart review")
+    telegram_bot_parser.add_argument("--telegram-bot-token", default=os.environ.get("TELEGRAM_BOT_TOKEN"))
+    telegram_bot_parser.add_argument("--allowed-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID"))
+    telegram_bot_parser.add_argument("--poll-seconds", type=float, default=2.0)
+    telegram_costco_parser = subcommands.add_parser("telegram-costco-bot", help="Run a Telegram bot that builds and reviews a real Costco Same Day cart in Chrome")
+    telegram_costco_parser.add_argument("--telegram-bot-token", default=os.environ.get("TELEGRAM_BOT_TOKEN"))
+    telegram_costco_parser.add_argument("--allowed-chat-id", default=os.environ.get("TELEGRAM_CHAT_ID"))
+    telegram_costco_parser.add_argument("--poll-seconds", type=float, default=2.0)
+    telegram_costco_parser.add_argument("--settle-seconds", type=float, default=4.0)
+    telegram_costco_parser.add_argument("--target-url-substring", default="sameday.costco.com")
 
     args = parser.parse_args()
     store = JsonStore(_data_path())
@@ -70,7 +90,10 @@ def main() -> None:
         profile.preferences.checkout_policy.preferred_tip = 0.0
         profile.preferences.product_rules = {
             "strawberries": ProductRule("strawberries", "strawberries fresh", "Kirkland Signature Organic Strawberries, 4 lbs"),
+            "blueberries": ProductRule("blueberries", "blueberries", "Blueberries, 18 oz"),
             "raspberries": ProductRule("raspberries", "raspberries", "Raspberries, 12 oz"),
+            "bananas": ProductRule("bananas", "bananas", "Bananas, 3 lbs"),
+            "apples": ProductRule("apples", "apple", "Organic Fuji Apples, 4 lbs"),
             "watermelon": ProductRule("watermelon", "watermelon", "Seedless Watermelon"),
             "oranges": ProductRule("oranges", "naval oranges", "Naval Oranges, 8 lbs"),
             "onions": ProductRule("onions", "red onions", "Red Onions, 5 lbs", notes="Household prefers red onions; avoid yellow onions."),
@@ -81,6 +104,8 @@ def main() -> None:
             "paneer": ProductRule("paneer", "paneer", "Paneer Cheese, 2 x 14 oz"),
             "olive oil": ProductRule("olive oil", "olive oil", "Kirkland Signature, Organic Extra Virgin Olive Oil, 2 L"),
             "scotch brite pads": ProductRule("scotch brite pads", "scotch brite pads", "Scotch-Brite Zero Scratch Sponge, 24-count"),
+            "lamb chops": ProductRule("lamb chops", "lamb chops", "Kirkland Signature Lamb Loin Chops, Australian"),
+            "chicken thighs": ProductRule("chicken thighs", "chicken thighs", "Kirkland Signature Fresh Boneless Skinless Chicken Thighs"),
         }
         profile.pantry = [
             PantryEstimate("milk", "milk", cadence_days=14, last_purchased=None, usual_quantity=1),
@@ -176,10 +201,61 @@ def main() -> None:
         from grocery_agent.web_app import run
 
         run(host=args.host, port=args.port)
+    elif args.command == "review-link":
+        cart = _latest_cart_or_exit(store)
+        notification = ReviewLinkBuilder(_required(args.base_url, "GROCERY_AGENT_REVIEW_BASE_URL")).notification_for(cart)
+        print(notification.review_url)
+    elif args.command == "notify-review":
+        cart = _latest_cart_or_exit(store)
+        notification = ReviewLinkBuilder(_required(args.base_url, "GROCERY_AGENT_REVIEW_BASE_URL")).notification_for(cart)
+        TelegramNotifier(
+            bot_token=_required(args.telegram_bot_token, "TELEGRAM_BOT_TOKEN"),
+            chat_id=_required(args.telegram_chat_id, "TELEGRAM_CHAT_ID"),
+        ).send_review(notification)
+        print(f"Sent Telegram review notification for cart {cart.id}.")
+    elif args.command == "telegram-review":
+        TelegramCartBot(
+            TelegramApiClient(_required(args.telegram_bot_token, "TELEGRAM_BOT_TOKEN")),
+            agent,
+            allowed_chat_id=args.telegram_chat_id,
+        ).send_latest_cart(_required(args.telegram_chat_id, "TELEGRAM_CHAT_ID"))
+        print("Sent Telegram cart review.")
+    elif args.command == "telegram-bot":
+        print("Telegram grocery bot is polling. Send /cart to the bot from Telegram.")
+        TelegramCartBot(
+            TelegramApiClient(_required(args.telegram_bot_token, "TELEGRAM_BOT_TOKEN")),
+            agent,
+            allowed_chat_id=args.allowed_chat_id,
+        ).run_polling(poll_seconds=args.poll_seconds)
+    elif args.command == "telegram-costco-bot":
+        profile = store.load_profile()
+        browser_agent = CostcoSameDayBrowserAgent(
+            AppleScriptChromeSession(settle_seconds=args.settle_seconds, target_url_substring=args.target_url_substring),
+            profile,
+        )
+        print("Telegram live Costco bot is polling. Send /grocery item1, item2.")
+        TelegramCostcoBot(
+            TelegramApiClient(_required(args.telegram_bot_token, "TELEGRAM_BOT_TOKEN")),
+            browser_agent,
+            allowed_chat_id=args.allowed_chat_id,
+        ).run_polling(poll_seconds=args.poll_seconds)
 
 
 def _data_path() -> Path:
     return Path(os.environ.get("GROCERY_AGENT_DATA", ".grocery_agent/data.json"))
+
+
+def _latest_cart_or_exit(store: JsonStore):
+    cart = store.latest_cart()
+    if cart is None:
+        raise SystemExit("No cart found. Generate a cart before sending a review link.")
+    return cart
+
+
+def _required(value: str | None, name: str) -> str:
+    if value:
+        return value
+    raise SystemExit(f"{name} is required.")
 
 
 if __name__ == "__main__":
