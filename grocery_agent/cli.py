@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import date
 from pathlib import Path
@@ -9,6 +10,7 @@ from grocery_agent.agent import GroceryAgent
 from grocery_agent.browser import AppleScriptChromeSession, BrowserAutomationError
 from grocery_agent.costco import MockCostcoClient
 from grocery_agent.costco_sameday import CostcoSameDayBrowserAgent, SafetyGateError, remember_product_rule
+from grocery_agent.gemini_hosting import CalendarEvent
 from grocery_agent.models import GroceryProfile, PantryEstimate, ProductRule
 from grocery_agent.notifications import ReviewLinkBuilder, TelegramApiClient, TelegramCartBot, TelegramCostcoBot, TelegramNotifier
 from grocery_agent.scheduler import BiweeklySundayScheduler
@@ -34,6 +36,10 @@ def main() -> None:
     proactive_parser = subcommands.add_parser("proactive", help="Prepare cart if every-other-Sunday schedule is due")
     proactive_parser.add_argument("--today", default=date.today().isoformat())
     proactive_parser.add_argument("--anchor-sunday", default="2026-05-10")
+    hosting_parser = subcommands.add_parser("gemini-hosting", help="Suggest dinner plan and grocery cart from upcoming calendar events")
+    hosting_parser.add_argument("events_file", help="JSON file containing calendar events")
+    hosting_parser.add_argument("--today", default=date.today().isoformat())
+    hosting_parser.add_argument("--horizon-days", type=int, default=14)
     rule_parser = subcommands.add_parser("remember-rule", help="Remember an exact Costco Same Day product mapping")
     rule_parser.add_argument("item")
     rule_parser.add_argument("search_query")
@@ -138,6 +144,23 @@ def main() -> None:
             print("No proactive cart due today.")
         else:
             print(agent.review_summary(cart))
+    elif args.command == "gemini-hosting":
+        raw_events = json.loads(Path(args.events_file).read_text())
+        events = [CalendarEvent.from_mapping(event) for event in raw_events]
+        recommendation = agent.generate_gemini_hosting_cart(events, today=date.fromisoformat(args.today), horizon_days=args.horizon_days)
+        if recommendation is None:
+            print("No at-home hosting events detected in the selected window.")
+        else:
+            plan = recommendation.plan
+            print(f"{plan.gemini_surface}: {plan.event.title} on {plan.event.start.isoformat()}")
+            print(f"Occasion: {plan.occasion}; guests: about {plan.guest_count}")
+            if plan.dietary_notes:
+                print(f"Dietary notes: {', '.join(plan.dietary_notes)}")
+            print("Menu:")
+            for item in plan.menu:
+                print(f"- {item}")
+            print("")
+            print(agent.review_summary(recommendation.cart))
     elif args.command == "remember-rule":
         profile = store.load_profile()
         remember_product_rule(

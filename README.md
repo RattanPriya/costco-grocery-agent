@@ -1,6 +1,6 @@
 # Costco Grocery Ordering Agent
 
-A modular personal grocery-ordering agent with a mocked Costco integration, JSON storage, cart review and approval gates, preference learning, and an every-other-Sunday proactive cart scheduler.
+A modular personal grocery-ordering agent with a mocked Costco integration, JSON storage, cart review and approval gates, preference learning, an every-other-Sunday proactive cart scheduler, and a native Gemini-style hosting assistant that turns calendar signals into meal plans and grocery carts.
 
 The current implementation is intentionally purchase-safe: it can generate and approve carts, but the mocked Costco adapter refuses to place any order unless explicit approval has been recorded.
 
@@ -10,6 +10,8 @@ The current implementation is intentionally purchase-safe: it can generate and a
 flowchart LR
     CLI["CLI review/edit/approve"] --> Agent["GroceryAgent"]
     Scheduler["BiweeklySundayScheduler"] --> Agent
+    Calendar["Calendar signals"] --> Gemini["Gemini hosting assist"]
+    Gemini --> Agent
     Agent --> Store["JsonStore"]
     Agent --> Costco["CostcoClient interface"]
     Costco --> Mock["MockCostcoClient"]
@@ -23,6 +25,7 @@ Core modules:
 - `grocery_agent.costco`: integration interface plus mocked Costco inventory/order behavior.
 - `grocery_agent.browser`: browser session abstraction, with fake test adapter and Chrome AppleScript adapter.
 - `grocery_agent.costco_sameday`: Costco Same Day preflight, exact product-rule cart building, checkout review parsing, tip policy, and final approval gating.
+- `grocery_agent.gemini_hosting`: native Gemini proactive hosting experience that detects at-home dinner events, suggests a menu, and creates a review-ready grocery cart.
 - `grocery_agent.security`: signed phone approval tokens.
 - `grocery_agent.cloud`: cloud credential/session policy helpers that reject raw Costco password storage.
 - `grocery_agent.web_app`: phone-friendly cart review and approval app.
@@ -40,6 +43,7 @@ python3 -m grocery_agent.cli review
 python3 -m grocery_agent.cli approve
 python3 -m grocery_agent.cli place-order
 python3 -m grocery_agent.cli proactive --today 2026-05-24
+python3 -m grocery_agent.cli gemini-hosting examples/gemini_calendar_events.json --today 2026-05-13
 ```
 
 By default data is stored in `.grocery_agent/data.json`. Override with:
@@ -47,6 +51,37 @@ By default data is stored in `.grocery_agent/data.json`. Override with:
 ```bash
 GROCERY_AGENT_DATA=/path/to/data.json python3 -m grocery_agent.cli review
 ```
+
+## Native Gemini Proactive Hosting
+
+The `gemini-hosting` flow models a native Gemini experience: Gemini notices a likely at-home dinner from calendar context, infers guest count and dietary needs, proposes a complete menu, and prepares a Costco cart for review.
+
+Example input:
+
+```json
+[
+  {
+    "title": "Hosting Indian dinner for 6",
+    "start": "2026-05-16T18:30:00-07:00",
+    "description": "Vegetarian friends coming over. Need an easy dinner plan and groceries.",
+    "attendees": ["a@example.com", "b@example.com"]
+  }
+]
+```
+
+Run it:
+
+```bash
+python3 -m grocery_agent.cli gemini-hosting examples/gemini_calendar_events.json --today 2026-05-13
+```
+
+The output includes:
+
+- event detection rationale
+- estimated guest count and dietary notes
+- meal plan across entree, sides, dessert, and drinks
+- review-ready cart with substitution handling, budget checks, and decision logs
+- the same explicit approval requirement before any order can be placed
 
 ## Autonomous Costco Same Day Setup
 

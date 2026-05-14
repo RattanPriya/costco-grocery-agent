@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, date, datetime
 
 from grocery_agent.costco import CostcoClient
+from grocery_agent.gemini_hosting import CalendarEvent, HostingCartRecommendation, build_hosting_plan, detect_hosting_events
 from grocery_agent.models import (
     ApprovalRecord,
     Cart,
@@ -46,6 +47,29 @@ class GroceryAgent:
         cart.status = CartStatus.REVIEW_READY
         self.store.save_cart(cart)
         return cart
+
+    def generate_gemini_hosting_cart(
+        self,
+        calendar_events: list[CalendarEvent],
+        today: date | None = None,
+        horizon_days: int = 14,
+    ) -> HostingCartRecommendation | None:
+        profile = self.store.load_profile()
+        detected = detect_hosting_events(calendar_events, today or date.today(), horizon_days=horizon_days)
+        if not detected:
+            return None
+
+        plan = build_hosting_plan(detected[0], profile)
+        cart = self.generate_cart(plan.grocery_items, today=today)
+        cart.decision_log.append(
+            _log(
+                "gemini_hosting_event_detected",
+                f"{plan.gemini_surface}: {plan.event.title} on {plan.event.start.isoformat()} for about {plan.guest_count} guest(s).",
+            )
+        )
+        cart.decision_log.append(_log("gemini_meal_plan_suggested", "Menu: " + "; ".join(plan.menu)))
+        self.store.save_cart(cart)
+        return HostingCartRecommendation(plan=plan, cart=cart)
 
     def review_summary(self, cart: Cart | None = None) -> str:
         cart = cart or self._latest_cart_or_raise()
@@ -188,6 +212,9 @@ class GroceryAgent:
         normalized = requested_item.lower()
         if normalized in product.name.lower() or normalized in product.category.lower() or normalized in product.tags:
             score += 20
+        product_text = " ".join([product.name, product.category, product.brand, *product.tags]).lower()
+        if any(never.lower() in product_text for never in profile.preferences.never_buy):
+            score -= 100
         if product.in_stock:
             score += 10
         if product.brand in profile.preferences.preferred_brands.get(product.category, []):

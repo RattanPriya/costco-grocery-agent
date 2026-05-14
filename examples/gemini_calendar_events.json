@@ -1,0 +1,13 @@
+[
+  {
+    "title": "Hosting Indian dinner for 6",
+    "start": "2026-05-16T18:30:00-07:00",
+    "description": "Vegetarian friends coming over. Need an easy dinner plan and groceries.",
+    "attendees": ["a@example.com", "b@example.com", "c@example.com", "d@example.com", "e@example.com"]
+  },
+  {
+    "title": "Dinner reservation downtown",
+    "start": "2026-05-17T19:00:00-07:00",
+    "location": "Restaurant"
+  }
+]
