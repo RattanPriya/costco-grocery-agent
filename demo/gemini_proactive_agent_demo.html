@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gemini Proactive Agent Demo</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #07130f;
+      overflow: hidden;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: #07130f;
+    }
+  </style>
+</head>
+<body>
+<canvas id="demo" width="1280" height="720"></canvas>
+<script>
+const canvas = document.getElementById("demo");
+const ctx = canvas.getContext("2d");
+const W = canvas.width;
+const H = canvas.height;
+const FPS = 30;
+const DURATION = 20;
+
+function clamp(v, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function smooth(v) {
+  v = clamp(v);
+  return v * v * (3 - 2 * v);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function sceneProgress(t, start, end) {
+  return smooth((t - start) / (end - start));
+}
+
+function drawRoundedRect(x, y, w, h, r, fill, stroke = null, lineWidth = 1) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+  }
+}
+
+function text(value, x, y, size, color = "#f6fbf7", weight = 600, align = "left", maxWidth = 900) {
+  ctx.font = `${weight} ${size}px Inter, ui-sans-serif, system-ui, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = "top";
+  ctx.fillText(value, x, y, maxWidth);
+}
+
+function multiline(lines, x, y, size, color, weight = 500, gap = 1.34) {
+  lines.forEach((line, i) => text(line, x, y + i * size * gap, size, color, weight));
+}
+
+function background(t) {
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, "#07130f");
+  g.addColorStop(0.38, "#12342a");
+  g.addColorStop(0.72, "#11282d");
+  g.addColorStop(1, "#17151f");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.globalAlpha = 0.14;
+  ctx.strokeStyle = "#a6f4c5";
+  ctx.lineWidth = 1;
+  for (let i = -4; i < 16; i++) {
+    const x = i * 110 + (t * 10) % 110;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x - 260, H);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  for (let i = 0; i < 34; i++) {
+    const x = (i * 97 + Math.sin(t * 0.7 + i) * 22) % W;
+    const y = (i * 61 + Math.cos(t * 0.9 + i) * 18) % H;
+    ctx.globalAlpha = 0.1 + 0.12 * Math.sin(t + i);
+    ctx.fillStyle = i % 2 ? "#b4f3d1" : "#99d6ff";
+    ctx.beginPath();
+    ctx.arc(x, y, 1.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function topBar() {
+  drawRoundedRect(42, 30, 1196, 58, 18, "rgba(8, 23, 19, 0.72)", "rgba(210, 255, 224, 0.18)");
+  text("Gemini", 72, 46, 24, "#eafff2", 760);
+  text("Proactive Agent", 171, 50, 16, "#a9caba", 650);
+  text("Calendar  •  Search  •  Grocery checkout", 880, 50, 16, "#b7d7cf", 550);
+}
+
+function phoneFrame(x, y, w, h, title) {
+  drawRoundedRect(x, y, w, h, 30, "rgba(248, 252, 247, 0.96)", "rgba(255,255,255,0.5)", 2);
+  drawRoundedRect(x + 72, y + 14, w - 144, 8, 4, "#dbe6de");
+  text(title, x + 28, y + 42, 16, "#2f4239", 760);
+}
+
+function calendarCard(x, y, title, time, active = false) {
+  drawRoundedRect(x, y, 420, 74, 16, active ? "#e9fff0" : "#f4f7f5", active ? "#35b779" : "#d5ded8", active ? 3 : 1);
+  text(title, x + 22, y + 15, 20, "#20352b", 760);
+  text(time, x + 22, y + 45, 15, "#63796e", 600);
+}
+
+function pill(value, x, y, color = "#e6fff0", ink = "#145c3d") {
+  const w = Math.max(88, value.length * 8.7 + 26);
+  drawRoundedRect(x, y, w, 34, 17, color, "rgba(20, 92, 61, 0.1)");
+  text(value, x + 13, y + 7, 14, ink, 700);
+  return w;
+}
+
+function check(x, y, s, color = "#2faf73") {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = s * 0.18;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(x, y + s * 0.52);
+  ctx.lineTo(x + s * 0.34, y + s * 0.84);
+  ctx.lineTo(x + s, y);
+  ctx.stroke();
+}
+
+function cartLine(x, y, item, price, delay, p) {
+  const a = sceneProgress(p, delay, delay + 0.14);
+  ctx.globalAlpha = a;
+  drawRoundedRect(x, y + (1 - a) * 18, 435, 52, 14, "#f8fbf7", "#dce6de");
+  check(x + 18, y + 17 + (1 - a) * 18, 18);
+  text(item, x + 52, y + 13 + (1 - a) * 18, 17, "#213b30", 650);
+  text(price, x + 366, y + 14 + (1 - a) * 18, 16, "#53665d", 650, "right");
+  ctx.globalAlpha = 1;
+}
+
+function drawScene(t) {
+  background(t);
+  topBar();
+
+  const s1 = sceneProgress(t, 0.2, 3.4);
+  const s2 = sceneProgress(t, 3.1, 7.2);
+  const s3 = sceneProgress(t, 6.6, 11.1);
+  const s4 = sceneProgress(t, 10.4, 15.5);
+  const s5 = sceneProgress(t, 14.8, 19.6);
+
+  if (t < 4.2) {
+    ctx.globalAlpha = 1 - sceneProgress(t, 3.4, 4.2);
+    text("It notices the weekend before you do.", 82, 168, 58, "#fbfff8", 780);
+    multiline([
+      "Gemini reads your calendar context, detects you are hosting dinner,",
+      "and turns a vague event into an actionable plan."
+    ], 86, 316, 24, "#cfe3d8", 500);
+    drawRoundedRect(86, 430, 514, 80, 22, "rgba(230,255,240,0.12)", "rgba(203,255,219,0.24)");
+    text("SAT 6:30 PM", 116, 448, 15, "#aef3cc", 800);
+    text("Hosting friends dinner for 6", 116, 474, 24, "#ffffff", 740);
+    ctx.globalAlpha = s1;
+    drawRoundedRect(760, 178, 360, 360, 180, "rgba(182, 255, 207, 0.12)", "rgba(182, 255, 207, 0.34)", 2);
+    text("Calendar", 880, 278, 20, "#bceccc", 700, "center");
+    text("→", 940, 320, 56, "#ffffff", 700, "center");
+    text("Menu", 940, 396, 20, "#c9e7ff", 700, "center");
+    ctx.globalAlpha = 1;
+  }
+
+  if (t >= 3.2 && t < 8.2) {
+    ctx.globalAlpha = sceneProgress(t, 3.2, 4.0) * (1 - sceneProgress(t, 7.6, 8.2));
+    phoneFrame(74, 126, 496, 520, "Calendar");
+    calendarCard(112, 196, "Team sync", "Fri 2:00 PM");
+    calendarCard(112, 290, "Hosting friends dinner for 6", "Sat 6:30 PM", true);
+    calendarCard(112, 384, "Pilates", "Sun 9:30 AM");
+    calendarCard(112, 478, "Grocery pickup window", "Suggested");
+
+    drawRoundedRect(670, 160, 492, 360, 24, "rgba(247, 253, 249, 0.95)", "rgba(255,255,255,0.42)");
+    text("Proactive suggestion", 704, 194, 18, "#2a5f44", 800);
+    text("You’re hosting dinner Saturday.", 704, 236, 33, "#12261d", 780);
+    multiline([
+      "I can suggest a menu for 6, build a grocery cart,",
+      "and schedule delivery before the party."
+    ], 706, 292, 19, "#596e62", 500);
+    const x1 = 706;
+    let px = x1;
+    px += pill("6 guests", px, 374) + 10;
+    px += pill("vegetarian option", px, 374) + 10;
+    pill("weekend delivery", px, 374);
+    drawRoundedRect(706, 444, 198, 48, 14, "#176b4d");
+    text("Show menu", 757, 457, 18, "#ffffff", 800);
+    ctx.globalAlpha = 1;
+  }
+
+  if (t >= 6.8 && t < 12.0) {
+    ctx.globalAlpha = sceneProgress(t, 6.8, 7.7) * (1 - sceneProgress(t, 11.4, 12.0));
+    drawRoundedRect(72, 120, 1136, 506, 30, "rgba(247, 252, 248, 0.96)", "rgba(255,255,255,0.46)");
+    text("Menu for guests", 116, 158, 42, "#10251c", 800);
+    text("Generated from calendar signal, guest count, and household preferences.", 118, 212, 20, "#5f7168", 500);
+
+    const menu = [
+      ["Paneer and vegetable curry", "Warm main"],
+      ["Chana masala", "Protein-rich side"],
+      ["Basmati rice and naan", "Easy sharing"],
+      ["Spinach tomato salad", "Fresh balance"],
+      ["Fruit and dessert board", "Party finish"],
+      ["Sparkling water", "Non-alcoholic drinks"]
+    ];
+    menu.forEach((row, i) => {
+      const x = 116 + (i % 2) * 514;
+      const y = 282 + Math.floor(i / 2) * 86;
+      const a = sceneProgress(t, 7.3 + i * 0.12, 7.9 + i * 0.12);
+      ctx.globalAlpha *= a;
+      drawRoundedRect(x, y, 454, 62, 16, "#ffffff", "#dce6df");
+      check(x + 22, y + 22, 18);
+      text(row[0], x + 58, y + 14, 20, "#193328", 720);
+      text(row[1], x + 58, y + 40, 13, "#6c7b73", 600);
+      ctx.globalAlpha /= Math.max(a, 0.01);
+    });
+
+    const approveP = sceneProgress(t, 9.7, 10.8);
+    drawRoundedRect(446, 548, 388, 54, 18, approveP > 0.45 ? "#0b8f5a" : "#176b4d");
+    text(approveP > 0.45 ? "Approved. Build my cart." : "Approve menu + grocery run", 640, 563, 19, "#ffffff", 820, "center");
+    if (approveP > 0.55) {
+      check(474, 562, 24, "#ffffff");
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if (t >= 10.7 && t < 16.2) {
+    ctx.globalAlpha = sceneProgress(t, 10.7, 11.6) * (1 - sceneProgress(t, 15.7, 16.2));
+    text("Gemini turns approval into action.", 82, 128, 47, "#ffffff", 800);
+    text("The agent builds the cart, applies preferences, checks substitutions, and places the order.", 86, 190, 22, "#d4e8dd", 500);
+
+    drawRoundedRect(86, 260, 494, 330, 24, "rgba(249, 252, 249, 0.96)", "rgba(255,255,255,0.42)");
+    text("Grocery cart", 124, 292, 27, "#193328", 800);
+    const localT = (t - 10.7) / 5.5;
+    cartLine(124, 348, "Sach Foods Paneer", "$14.99", 0.04, localT);
+    cartLine(124, 410, "Basmati rice + naan", "$27.98", 0.16, localT);
+    cartLine(124, 472, "Spinach, tomatoes, red onions", "$19.47", 0.28, localT);
+    cartLine(124, 534, "Dessert + sparkling water", "$29.98", 0.40, localT);
+
+    drawRoundedRect(704, 260, 420, 330, 24, "rgba(16, 35, 28, 0.86)", "rgba(191,255,212,0.22)");
+    text("Autonomous run", 742, 294, 25, "#eafff2", 800);
+    const steps = [
+      ["Preferences applied", "red onions, vegetarian"],
+      ["Budget checked", "$127.38 estimated"],
+      ["Delivery selected", "Saturday morning"],
+      ["Order placed", "ready before guests arrive"]
+    ];
+    steps.forEach((step, i) => {
+      const a = sceneProgress(t, 11.5 + i * 0.75, 12.2 + i * 0.75);
+      ctx.globalAlpha *= a;
+      check(748, 356 + i * 54, 20, "#9effc3");
+      text(step[0], 786, 346 + i * 54, 19, "#ffffff", 720);
+      text(step[1], 786, 371 + i * 54, 14, "#a8c9b8", 500);
+      ctx.globalAlpha /= Math.max(a, 0.01);
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  if (t >= 15.0) {
+    ctx.globalAlpha = sceneProgress(t, 15.0, 16.0);
+    drawRoundedRect(88, 128, 1104, 472, 34, "rgba(247,252,249,0.97)", "rgba(255,255,255,0.45)");
+    text("Ready for the weekend.", 142, 178, 56, "#10251c", 820);
+    multiline([
+      "Calendar detected the moment.",
+      "Gemini planned the menu.",
+      "Groceries arrived before the party."
+    ], 146, 272, 27, "#4f6559", 540);
+    drawRoundedRect(720, 178, 334, 286, 26, "#17382d", "rgba(44, 186, 118, 0.35)");
+    text("Saturday", 758, 220, 20, "#9effc3", 800);
+    text("10:00 AM", 758, 256, 56, "#ffffff", 820);
+    text("Grocery delivery scheduled", 758, 336, 22, "#d8eee1", 650);
+    text("Dinner for 6 is handled.", 758, 378, 20, "#b8dac8", 540);
+    drawRoundedRect(146, 468, 428, 60, 18, "#176b4d");
+    text("Proactive search that gets things done", 360, 486, 20, "#ffffff", 820, "center");
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.globalAlpha = 0.82;
+  text("Demo concept • native Gemini experience", 80, 660, 16, "#b8cfc4", 600);
+  text("Calendar → Menu → Approval → Grocery order", 1198, 660, 16, "#b8cfc4", 600, "right");
+  ctx.globalAlpha = 1;
+}
+
+let previewStart = performance.now();
+function preview() {
+  drawScene(((performance.now() - previewStart) / 1000) % DURATION);
+  requestAnimationFrame(preview);
+}
+preview();
+
+window.renderDemo = async function renderDemo() {
+  const stream = canvas.captureStream(FPS);
+  const type = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+    ? "video/webm;codecs=vp9"
+    : "video/webm";
+  const recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 7_000_000 });
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  recorder.start();
+  for (let frame = 0; frame < DURATION * FPS; frame++) {
+    drawScene(frame / FPS);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+  }
+  recorder.stop();
+  await new Promise(resolve => recorder.onstop = resolve);
+  const blob = new Blob(chunks, { type });
+  const buffer = await blob.arrayBuffer();
+  return Array.from(new Uint8Array(buffer));
+};
+</script>
+</body>
+</html>
